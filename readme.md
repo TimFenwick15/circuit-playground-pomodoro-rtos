@@ -5,7 +5,7 @@ Found an example of FreeRTOS ported to Arduino here: https://feilipu.me/2015/11/
 
 In Sketch > Include Libraries > Manage Libraries..., search for FreeRTOS and install the first result.
 
-I addapted the blink example.
+I adapted the blink example.
 
 Task notification reference: https://www.freertos.org/RTOS_Task_Notification_As_Event_Group.html
 
@@ -15,10 +15,10 @@ Task notification reference: https://www.freertos.org/RTOS_Task_Notification_As_
 
 This could be broken into tasks:
 - Count minutes
-- Check for state change between work and brake
+- Check for state change between work and break
 - Update the lights
 
 ## Bugs
-- Code doesn't run unless serial console open
+- Code doesn't run unless serial console open, this seemed to affect the example as well
 - 10% should turn on light 0, but turns on light 1
 
