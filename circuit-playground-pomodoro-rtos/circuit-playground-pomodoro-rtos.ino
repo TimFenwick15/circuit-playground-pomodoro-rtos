@@ -7,6 +7,7 @@
 #define PERCENT_MAX (100)
 #define LED_COUNT (10)
 #define ULONG_MAX (0xFFFFFFFF)
+#define COLOUR_MAX (255)
 
 #define NOTIFICATION_POMODORO_TICK   (0x01)
 #define NOTIFICATION_POMODORO_BUTTON (0x02)
@@ -25,31 +26,26 @@
 #define NOTIFICATION_LIGHT_G         (0x0800)
 #define NOTIFICATION_LIGHT_B         (0x1000)
 
-typedef enum {
+typedef enum
+{
   eStateWork = 0,
   eStateBreak
 } teState;
-/*
-typedef enum {
-  eColourRed = 0,
-  eColourGreen,
-  eColourBlue
-} teColour;*/
+
+unsigned long ulPowerOfTwo(unsigned short power);
 
 void taskCountTime(void* pvParameters);
 void taskState(void* pvParameters);
-//void taskClearLights(void* pvParameters);
 void taskUpdateLights(void* pvParameters);
 
 static TaskHandle_t stateTaskHandle        = NULL;
-//static TaskHandle_t clearLightsTaskHandle  = NULL;
 static TaskHandle_t updateLightsTaskHandle = NULL;
 
-//static teColour eColour = eColourRed;
-
-void setup() {
+void setup()
+{
   Serial.begin(9600); /* BUG: unless serial is started and a console opened, the code hangs */
-  while (!Serial) {
+  while (!Serial)
+  {
     ; /* wait for serial port to connect */
   }
   
@@ -67,16 +63,8 @@ void setup() {
     ,  128  /* Stack size */
     ,  NULL
     ,  2  /* Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest. */
-    ,  stateTaskHandle );
+    ,  &stateTaskHandle );
 
-  /*xTaskCreate(
-    taskClearLights
-    ,  "ClearLights"
-    ,  128
-    ,  NULL
-    ,  1
-    ,  &clearLightsTaskHandle );
-*/
   xTaskCreate(
     taskUpdateLights
     ,  "UpdateLights"
@@ -92,161 +80,167 @@ void loop()
 {
 }
 
-void taskCountTime(void* pvParameters) {
-  //unsigned int count = 0;
-  //teState eState = eStateWork;
-  //unsigned int percentageTime = 0;
+/*
+ * Helper
+ */
+unsigned long ulPowerOfTwo(unsigned short power)
+{
+  unsigned long result = 2;
+  for (unsigned short i = power; i > 1; i--)
+  {
+    result *= 2;
+  }
+  return result;
+}
+/*
+ * Tasks
+ */
+void taskCountTime(void* pvParameters)
+{
   for (;;)
   {
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     Serial.println("count");
-    xTaskNotify(updateLightsTaskHandle, NOTIFICATION_POMODORO_TICK, eSetBits);
-#if 0
-    switch (eState) {
-      case eStateWork:
-        percentageTime = (PERCENT_MAX * count) / SECONDS_OF_WORK;
-        break;
-      case eStateBreak:
-        percentageTime = (PERCENT_MAX * count) / SECONDS_OF_BREAK;
-        break;
-    }
-
-    /* Send a notification, 10 percentage interval */
-    if ((percentageTime % NOTIFICATION_PERCENTAGE) == 0) {
-      xTaskNotify(updateLightsTaskHandle, percentageTime, eSetValueWithOverwrite);
-    }
-    
-    /* Change state. Send a notification, state has changed from work to break */
-    if (percentageTime >= PERCENT_MAX) {
-      count = 0;
-      if (eStateWork == eState) {
-        eState = eStateBreak;
-      }
-      else if (eState == eStateBreak) {
-        eState = eStateWork;
-      }
-      else {
-        /* completeness */
-      }
-      
-      xTaskNotify(clearLightsTaskHandle, eState, eSetValueWithOverwrite);
-    }
-    
-    count++;
-#endif
+    xTaskNotify(stateTaskHandle, NOTIFICATION_POMODORO_TICK, eSetBits);
   }
 }
 
-void taskState(void* pvParameters) {
+void taskState(void* pvParameters)
+{
     
   teState pomodoroState = eStateWork;
   unsigned short tickCount = 0;
-  unsigned int stateTime = 0;
+  unsigned int stateTime = SECONDS_OF_WORK;
+  unsigned short previousNotificationPercentage = 0;
 
-  for (;;) {
+  for (;;)
+  {
     BaseType_t xResult;
     unsigned long ulNotifiedValue = 0;
     unsigned long lightCommand = 0;
     unsigned short percentageTime = 0;
     bool changeLight = false;
     bool changeState = false;
-    stateTime = 
     xResult = xTaskNotifyWait( pdFALSE, /* Don't clear bits on entry. */
                  ULONG_MAX,             /* Clear all bits on exit. */
                  &ulNotifiedValue,      /* Stores the notified value. */
                  portMAX_DELAY );
 
-                 
-    if (ulNotifiedValue & NOTIFICATION_POMODORO_TICK) {
-      tickCount++;
-      percentageTime = (PERCENT_MAX * count) / stateTime;
-      if (percentageTime >= PERCENT_MAX) {
-        changeState = true;  
-      }
-
-      /**** TBC. We need to know what the last update notification was so we can set the new update notification when appropriate. Then rewrite light function, then implement button poll ***/
-      changeLight = true;
-    }
-    if (ulNotifiedValue & NOTIFICATION_POMODORO_BUTTON) {
+    if (ulNotifiedValue & NOTIFICATION_POMODORO_BUTTON)
+    {
       changeState = true;
+    }
+    else if (ulNotifiedValue & NOTIFICATION_POMODORO_TICK)
+    {
+      tickCount++;
+      percentageTime = (PERCENT_MAX * tickCount) / stateTime;
+      if (percentageTime >= 110)
+      {
+        changeState = true;
+      }
+      else if (((percentageTime % NOTIFICATION_PERCENTAGE) == 0)
+              && (percentageTime != previousNotificationPercentage))
+      {
+        /**** Then rewrite light function, then implement button poll ***/
+
+        /*
+         * lightCount = 1, command = 0x1
+         * lightCount = 2, command = 0x3
+         * lightCount = 3, command = 0x7. (2 ** lightCount) - 1
+         */
+        
+        unsigned short lightCount = percentageTime / NOTIFICATION_PERCENTAGE;
+        lightCommand |= ulPowerOfTwo(lightCount) - 1;
+        previousNotificationPercentage = percentageTime;
+
+        if (eStateWork == pomodoroState)
+        {
+          lightCommand |= NOTIFICATION_LIGHT_R;
+        }
+        else
+        {
+          lightCommand |= NOTIFICATION_LIGHT_G;
+        }
+        
+        changeLight = true;  
+      }
+      else
+      {
+        /* Completeness */
+      }
+    }
+    else
+    {
+      /* Completeness */
     }
 
     /* Change state */
-    if (true == changeState) {
-      if (eStateWork == pomodoroState) {
+    if (true == changeState)
+    {
+      tickCount = 0;
+      previousNotificationPercentage = 0;
+      
+      if (eStateWork == pomodoroState)
+      {
         pomodoroState = eStateBreak;
         stateTime = SECONDS_OF_BREAK;
-        lightCommand |= NOTIFICATION_LIGHT_G;
       }
-      else {
+      else
+      {
         pomodoroState = eStateWork;
         stateTime = SECONDS_OF_WORK;
-        lightCommand |= NOTIFICATION_LIGHT_R;
       }
     }
 
     /* Send on notification */
-    if ((true == changeState) || (true == changeLight)) {
+    if ((true == changeState) || (true == changeLight))
+    {
       xTaskNotify(updateLightsTaskHandle, lightCommand, eSetBits);
     }
   }
 }
 
-void taskUpdateLights(void* pvParameters) {
+void taskUpdateLights(void* pvParameters)
+{
   BaseType_t xResult;
   unsigned long ulNotifiedValue = 0;
   unsigned long ulLed = 0;
 
-  for (;;) {
+  for (;;)
+  {
+    unsigned short red = 0;
+    unsigned short green = 0;
+    unsigned short blue = 0;
     xResult = xTaskNotifyWait( pdFALSE,    /* Don't clear bits on entry. */
                      ULONG_MAX,            /* Clear all bits on exit. */
                      &ulNotifiedValue,     /* Stores the notified value. */
                      portMAX_DELAY );
 
-    Serial.print("light ");
-    Serial.println(ulNotifiedValue);
-    
+    Serial.println("light");
 
-    ulLed = ulNotifiedValue / NOTIFICATION_PERCENTAGE;
-    
-    /* light up based on percentage completed */
-    switch (eColour) {
-      case eColourRed:
-        CircuitPlayground.setPixelColor(ulLed, 255, 0, 0);  
-        break;
-      case eColourGreen:
-        CircuitPlayground.setPixelColor(ulLed, 0, 255, 0);  
-        break;
-      case eColourBlue:
-        CircuitPlayground.setPixelColor(ulLed, 0, 0, 255);  
-        break;
+    if (ulNotifiedValue & NOTIFICATION_LIGHT_R)
+    {
+      red = COLOUR_MAX;
+    }
+    if (ulNotifiedValue & NOTIFICATION_LIGHT_G)
+    {
+      green = COLOUR_MAX;
+    }
+    if (ulNotifiedValue & NOTIFICATION_LIGHT_B)
+    {
+      blue = COLOUR_MAX;
+    }
+    for (unsigned short i = 0; i < LED_COUNT; i++)
+    {
+      if (ulNotifiedValue & (1 << i))
+      {
+        CircuitPlayground.setPixelColor(i, red, green, blue);  
+      }
+      else
+      {
+        CircuitPlayground.setPixelColor(i, 0, 0, 0);  
+      }
     }
   }
 }
-#if 0
-void taskClearLights(void* pvParameters) {
-  BaseType_t xResult;
-  unsigned long ulNotifiedValue = 0;
-  for (;;) {
-    xResult = xTaskNotifyWait( pdFALSE, /* Don't clear bits on entry. */
-                 ULONG_MAX,             /* Clear all bits on exit. */
-                 &ulNotifiedValue,      /* Stores the notified value. */
-                 portMAX_DELAY );
 
-    Serial.print("clear ");
-    Serial.println(ulNotifiedValue);
-
-    if (eStateWork == ulNotifiedValue) {
-      eColour = eColourRed;
-    }
-    else if (eStateBreak == ulNotifiedValue) {
-      eColour = eColourGreen;
-    }
-    else {
-      /* completeness */
-    }
-
-    CircuitPlayground.clearPixels();
-  }
-}
-#endif
