@@ -34,6 +34,7 @@ typedef enum
 
 unsigned long ulPowerOfTwo(unsigned short power);
 
+void taskPollButtons(void* pvParameters);
 void taskCountTime(void* pvParameters);
 void taskState(void* pvParameters);
 void taskUpdateLights(void* pvParameters);
@@ -48,13 +49,21 @@ void setup()
   {
     ; /* wait for serial port to connect */
   }
+
+  xTaskCreate(
+    taskPollButtons
+    ,  "PollButtons"
+    ,  128  /* Stack size */
+    ,  NULL
+    ,  3  /* Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest. */
+    ,  NULL );
   
   xTaskCreate(
     taskCountTime
     ,  "CountTime"
     ,  128  /* Stack size */
     ,  NULL
-    ,  3  /* Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest. */
+    ,  2  /* Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest. */
     ,  NULL );
     
   xTaskCreate(
@@ -62,7 +71,7 @@ void setup()
     ,  "State"
     ,  128  /* Stack size */
     ,  NULL
-    ,  2  /* Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest. */
+    ,  0  /* Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest. */
     ,  &stateTaskHandle );
 
   xTaskCreate(
@@ -95,6 +104,29 @@ unsigned long ulPowerOfTwo(unsigned short power)
 /*
  * Tasks
  */
+void taskPollButtons(void* pvParameters)
+{
+  bool buttonState = false;
+  for (;;)
+  {
+    vTaskDelay(20 / portTICK_PERIOD_MS);
+    if (CircuitPlayground.leftButton() || CircuitPlayground.rightButton())
+    {
+      if (false == buttonState)
+      {
+        buttonState = true;
+        xTaskNotify(stateTaskHandle, NOTIFICATION_POMODORO_BUTTON, eSetBits);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+      }
+    }
+    else
+    {
+      buttonState = false;
+    }
+  }
+  
+}
+ 
 void taskCountTime(void* pvParameters)
 {
   for (;;)
