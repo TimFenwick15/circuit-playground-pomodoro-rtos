@@ -8,6 +8,7 @@
 #define LED_COUNT (10)
 #define ULONG_MAX (0xFFFFFFFF)
 #define COLOUR_MAX (255)
+#define SERIAL_WAIT (200)
 
 #define NOTIFICATION_POMODORO_TICK   (0x01)
 #define NOTIFICATION_POMODORO_BUTTON (0x02)
@@ -32,7 +33,7 @@ typedef enum
   eStateBreak
 } teState;
 
-unsigned long ulPowerOfTwo(unsigned short power);
+uint32_t ulPowerOfTwo(uint8_t power);
 
 void taskPollButtons(void* pvParameters);
 void taskCountTime(void* pvParameters);
@@ -44,10 +45,26 @@ static TaskHandle_t updateLightsTaskHandle = NULL;
 
 void setup()
 {
-  Serial.begin(9600); /* BUG: unless serial is started and a console opened, the code hangs */
+  /* If the following block is left out, the code will run when the board is supplied 5V.
+   * If the board is connected to a PC, the code will hang. Waiting for (Serial) and opening a console makes it work.
+   * Waiting for serial up to a maximum time as below makes the code run whether supplied 5V or connected to a PC.
+   * This adds 2.5s to the start up time, but this demo application doens't require fast boot time.
+   * If you open a serial console, the code hangs again.
+   * A better way would be to detect if we're connected to a PC, and then setup serial. Else just set up the tasks.
+   * Or, we could find what in the Arduino library is causing this.
+   * 
+   * Incidentally, if (!Serial) works because of "Serial_::operator bool()" defined in ArduinoCore-avr/cores/arduino/CDC.cpp
+   * from https://github.com/arduino/ArduinoCore-avr
+   */
+  uint8_t count = 0;
   while (!Serial)
   {
-    ; /* wait for serial port to connect */
+    delay(10);
+    count++;
+    if (count >= SERIAL_WAIT)
+    {
+      break;
+    }
   }
 
   xTaskCreate(
@@ -92,15 +109,16 @@ void loop()
 /*
  * Helper
  */
-unsigned long ulPowerOfTwo(unsigned short power)
+uint32_t ulPowerOfTwo(uint8_t power)
 {
-  unsigned long result = 2;
-  for (unsigned short i = power; i > 1; i--)
+  uint32_t result = 2;
+  for (uint8_t i = power; i > 1; i--)
   {
     result *= 2;
   }
   return result;
 }
+
 /*
  * Tasks
  */
@@ -112,11 +130,12 @@ void taskPollButtons(void* pvParameters)
     vTaskDelay(20 / portTICK_PERIOD_MS);
     if (CircuitPlayground.leftButton() || CircuitPlayground.rightButton())
     {
+      /* Debounce - we want a rising edge of a button press only */
       if (false == buttonState)
       {
         buttonState = true;
         xTaskNotify(stateTaskHandle, NOTIFICATION_POMODORO_BUTTON, eSetBits);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(100 / portTICK_PERIOD_MS); /* In case the signal bounces on button push, reject further signals for 100ms */
       }
     }
     else
@@ -132,7 +151,6 @@ void taskCountTime(void* pvParameters)
   for (;;)
   {
     vTaskDelay(1000 / portTICK_PERIOD_MS);
-    Serial.println("count");
     xTaskNotify(stateTaskHandle, NOTIFICATION_POMODORO_TICK, eSetBits);
   }
 }
@@ -141,16 +159,16 @@ void taskState(void* pvParameters)
 {
     
   teState pomodoroState = eStateWork;
-  unsigned short tickCount = 0;
-  unsigned int stateTime = SECONDS_OF_WORK;
-  unsigned short previousNotificationPercentage = 0;
+  uint16_t tickCount = 0;
+  uint16_t stateTime = SECONDS_OF_WORK;
+  uint8_t previousNotificationPercentage = 0;
 
   for (;;)
   {
     BaseType_t xResult;
-    unsigned long ulNotifiedValue = 0;
-    unsigned long lightCommand = 0;
-    unsigned short percentageTime = 0;
+    uint32_t ulNotifiedValue = 0;
+    uint32_t lightCommand = 0;
+    uint8_t percentageTime = 0;
     bool changeLight = false;
     bool changeState = false;
     xResult = xTaskNotifyWait( pdFALSE, /* Don't clear bits on entry. */
@@ -165,7 +183,7 @@ void taskState(void* pvParameters)
     else if (ulNotifiedValue & NOTIFICATION_POMODORO_TICK)
     {
       tickCount++;
-      percentageTime = (PERCENT_MAX * tickCount) / stateTime;
+      percentageTime = (uint8_t)((PERCENT_MAX * tickCount) / stateTime);
       if (percentageTime >= 110)
       {
         changeState = true;
@@ -235,20 +253,18 @@ void taskState(void* pvParameters)
 void taskUpdateLights(void* pvParameters)
 {
   BaseType_t xResult;
-  unsigned long ulNotifiedValue = 0;
-  unsigned long ulLed = 0;
+  uint32_t ulNotifiedValue = 0;
+  uint32_t ulLed = 0;
 
   for (;;)
   {
-    unsigned short red = 0;
-    unsigned short green = 0;
-    unsigned short blue = 0;
+    uint8_t red = 0;
+    uint8_t green = 0;
+    uint8_t blue = 0;
     xResult = xTaskNotifyWait( pdFALSE,    /* Don't clear bits on entry. */
                      ULONG_MAX,            /* Clear all bits on exit. */
                      &ulNotifiedValue,     /* Stores the notified value. */
                      portMAX_DELAY );
-
-    Serial.println("light");
 
     if (ulNotifiedValue & NOTIFICATION_LIGHT_R)
     {
@@ -262,8 +278,9 @@ void taskUpdateLights(void* pvParameters)
     {
       blue = COLOUR_MAX;
     }
-    for (unsigned short i = 0; i < LED_COUNT; i++)
+    for (uint8_t i = 0; i < LED_COUNT; i++)
     {
+      /* Check each numbered light command bit, if this bit is set, turn on this light */
       if (ulNotifiedValue & (1 << i))
       {
         CircuitPlayground.setPixelColor(i, red, green, blue);  
